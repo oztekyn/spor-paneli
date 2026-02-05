@@ -5,7 +5,7 @@ import { supabase } from '../lib/supabase'
 import dynamic from 'next/dynamic'
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, addMonths, subMonths } from 'date-fns'
 import { tr } from 'date-fns/locale'
-import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Clock, Dumbbell, Trash2, Plus, Minus, CheckCircle, TrendingDown, AlertTriangle } from 'lucide-react'
+import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Clock, Dumbbell, Trash2, Plus, Minus, CheckCircle, TrendingDown, AlertTriangle, XCircle } from 'lucide-react'
 
 const LineChart = dynamic(() => import('recharts').then(mod => mod.LineChart), { ssr: false })
 const Line = dynamic(() => import('recharts').then(mod => mod.Line), { ssr: false })
@@ -35,31 +35,20 @@ export default function Home() {
   const [localHeight, setLocalHeight] = useState('')
   const [saveStatus, setSaveStatus] = useState(false)
 
-  // MODAL SCROLL DURDURMA
   useEffect(() => {
     if (selectedMember) { document.body.style.overflow = 'hidden' }
     else { document.body.style.overflow = 'unset' }
   }, [selectedMember])
 
-  // SABİT SIRALAMALI VERİ ÇEKME
   async function fetchData() {
     try {
-      // Önce created_at (yeni gelen başa), eğer o aynıysa id (isim) sırasına göre diz
-      const { data: mData } = await supabase
-        .from('members')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .order('id', { ascending: true }); // Eşitlik bozucu kural eklendi
-
+      const { data: mData } = await supabase.from('members').select('*').order('created_at', { ascending: false }).order('id', { ascending: true });
       const { data: wData } = await supabase.from('weight_logs').select('*')
-      
       const membersWithLogs = mData?.map(member => ({
         ...member,
         weight_logs: wData?.filter(log => log.member_id === member.id) || []
       }))
-
       setMembers(membersWithLogs || [])
-
       const todayStr = format(new Date(), 'yyyy-MM-dd')
       const { data: aData } = await supabase.from('appointments').select('*').eq('training_date', todayStr)
       setTodayAppointments(aData || [])
@@ -67,20 +56,6 @@ export default function Home() {
   }
 
   useEffect(() => { fetchData() }, [])
-
-  // VKİ DURUMU
-  const lastWeight = weightLogs.length > 0 ? weightLogs[weightLogs.length - 1].weight : 0
-  const hVal = parseFloat(localHeight) || 0
-  const bmi = (lastWeight > 0 && hVal > 0) ? (lastWeight / (hVal * hVal)).toFixed(1) : '--'
-
-  const getBmiStatus = (val: string) => {
-    const n = parseFloat(val)
-    if (isNaN(n)) return { label: 'Veri Yok', color: 'text-gray-500' }
-    if (n < 18.5) return { label: 'Zayıf', color: 'text-blue-400' }
-    if (n < 25) return { label: 'İdeal', color: 'text-green-400' }
-    if (n < 30) return { label: 'Fazla Kilolu', color: 'text-yellow-500' }
-    return { label: 'Obezite', color: 'text-red-500' }
-  }
 
   async function showProfile(member: any) {
     setSelectedMember(member)
@@ -93,39 +68,36 @@ export default function Home() {
     setAppointments(aData || [])
   }
 
-  async function saveField(field: string, value: any) {
-    if (!selectedMember) return
-    await supabase.from('members').update({ [field]: value }).eq('id', selectedMember.id)
-    setSaveStatus(true)
-    setTimeout(() => setSaveStatus(false), 2000)
-    fetchData()
+  const bmi = (weightLogs.length > 0 && parseFloat(localHeight) > 0) ? (weightLogs[weightLogs.length - 1].weight / (parseFloat(localHeight) ** 2)).toFixed(1) : '--'
+  const getBmiStatus = (val: string) => {
+    const n = parseFloat(val); if (isNaN(n)) return { label: 'Veri Yok', color: 'text-gray-500' };
+    if (n < 18.5) return { label: 'Zayıf', color: 'text-blue-400' }; if (n < 25) return { label: 'İdeal', color: 'text-green-400' };
+    if (n < 30) return { label: 'Fazla Kilolu', color: 'text-yellow-500' }; return { label: 'Obezite', color: 'text-red-500' };
   }
 
+  async function saveField(field: string, value: any) { if (!selectedMember) return; await supabase.from('members').update({ [field]: value }).eq('id', selectedMember.id); setSaveStatus(true); setTimeout(() => setSaveStatus(false), 2000); fetchData(); }
+  
   async function saveAppointment() {
     if (!selectedDate || !selectedMember) return
     const dateStr = format(selectedDate, 'yyyy-MM-dd')
     await supabase.from('appointments').upsert({ member_id: selectedMember.id, training_date: dateStr, training_time: trainingTime, workout_program: workoutProgram }, { onConflict: 'member_id, training_date' })
-    showProfile(selectedMember)
-    setSaveStatus(true)
-    setTimeout(() => setSaveStatus(false), 2000)
-    fetchData()
+    showProfile(selectedMember); setSaveStatus(true); setTimeout(() => setSaveStatus(false), 2000); fetchData();
   }
 
-  // +/- BUTONLARI VE SEANS GÜNCELLEME
-  async function updateSession(e: any, memberId: any, newCount: number) { 
-    e.stopPropagation(); 
-    if (newCount < 0) return; 
-    await supabase.from('members').update({ remaining_sessions: newCount }).eq('id', memberId); 
-    fetchData(); 
+  // YENİ: RANDEVU İPTAL ETME FONKSİYONU
+  async function deleteAppointment() {
+    if (!selectedDate || !selectedMember) return
+    const dateStr = format(selectedDate, 'yyyy-MM-dd')
+    if (window.confirm(`${format(selectedDate, 'd MMMM', { locale: tr })} tarihindeki antrenman iptal edilsin mi?`)) {
+      const { error } = await supabase.from('appointments').delete().eq('member_id', selectedMember.id).eq('training_date', dateStr)
+      if (!error) {
+        setTrainingTime(''); setWorkoutProgram(''); showProfile(selectedMember); fetchData();
+      }
+    }
   }
 
-  async function togglePayment(e: any, memberId: any, currentStatus: string) { 
-    e.stopPropagation(); 
-    const newStatus = currentStatus === 'Ödendi' ? 'Borçlu' : 'Ödendi'; 
-    await supabase.from('members').update({ payment_status: newStatus }).eq('id', memberId); 
-    fetchData(); 
-  }
-
+  async function updateSession(e: any, memberId: any, newCount: number) { e.stopPropagation(); if (newCount < 0) return; await supabase.from('members').update({ remaining_sessions: newCount }).eq('id', memberId); fetchData(); }
+  async function togglePayment(e: any, memberId: any, currentStatus: string) { e.stopPropagation(); const newStatus = currentStatus === 'Ödendi' ? 'Borçlu' : 'Ödendi'; await supabase.from('members').update({ payment_status: newStatus }).eq('id', memberId); fetchData(); }
   async function deleteMember(e: any, memberId: any) { e.stopPropagation(); if (window.confirm(`${memberId} silinsin mi?`)) { await supabase.from('members').delete().eq('id', memberId); fetchData(); } }
   async function addWeight(e: React.FormEvent) { e.preventDefault(); if (!newWeight || !selectedMember) return; await supabase.from('weight_logs').insert([{ member_id: selectedMember.id, weight: parseFloat(newWeight) }]); setNewWeight(''); showProfile(selectedMember); fetchData(); }
 
@@ -152,17 +124,17 @@ export default function Home() {
             <h2 className="text-[10px] font-black uppercase tracking-[0.3em] text-gray-600 mb-6 flex items-center gap-2">
                 <Clock className="text-green-500" size={16}/> Günün Randevuları
             </h2>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-left">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 {todayAppointments.length > 0 ? todayAppointments.map((app) => (
-                    <div key={app.id} className="bg-white/5 border border-white/5 p-6 rounded-[2.5rem] backdrop-blur-md shadow-xl text-left">
+                    <div key={app.id} className="bg-white/5 border border-white/5 p-6 rounded-[2.5rem] backdrop-blur-md shadow-xl">
                         <div className="flex justify-between items-start mb-4">
                             <span className="font-black text-green-400 text-lg uppercase tracking-tight">{app.member_id}</span>
                             <span className="bg-green-500 text-black text-[10px] font-black px-3 py-1 rounded-full">{app.training_time}</span>
                         </div>
-                        <p className="text-[10px] text-gray-400 italic leading-relaxed text-left">{app.workout_program || 'Program henüz yazılmadı'}</p>
+                        <p className="text-[10px] text-gray-400 italic leading-relaxed">{app.workout_program || 'Henüz program girilmedi'}</p>
                     </div>
                 )) : (
-                    <div className="col-span-full py-10 border border-dashed border-white/10 rounded-[2.5rem] text-center text-gray-600 text-[10px] font-black uppercase tracking-widest">Bugün için randevu planlanmadı.</div>
+                    <div className="col-span-full py-10 border border-dashed border-white/10 rounded-[2.5rem] text-center text-gray-600 text-[10px] font-black uppercase tracking-widest">Bugün randevu planlanmadı.</div>
                 )}
             </div>
         </section>
@@ -182,7 +154,7 @@ export default function Home() {
         {/* ÜYE LİSTESİ */}
         <div className="grid md:grid-cols-2 gap-6 mb-12 text-left">
           {members.map((member) => {
-            const progress = (member.weight_logs && member.weight_logs.length >= 2) ? (member.weight_logs[member.weight_logs.length - 1].weight - member.weight_logs[0].weight).toFixed(1) : null;
+            const progVal = (member.weight_logs && member.weight_logs.length >= 2) ? (member.weight_logs[member.weight_logs.length - 1].weight - member.weight_logs[0].weight).toFixed(1) : null;
             return (
               <div key={member.id} onClick={() => showProfile(member)} className={`group bg-white/5 backdrop-blur-sm p-8 rounded-[3rem] border transition-all duration-300 flex justify-between items-center cursor-pointer shadow-xl ${member.remaining_sessions <= 2 ? 'border-orange-500/50 bg-orange-500/5' : 'border-white/5 hover:border-green-500/30'}`}>
                 <div className="flex items-center gap-6">
@@ -191,9 +163,9 @@ export default function Home() {
                     <h3 className="font-bold uppercase text-2xl mb-1 tracking-tight">{member.id}</h3>
                     <div className="flex items-center gap-3">
                         <button onClick={(e) => togglePayment(e, member.id, member.payment_status)} className={`text-[10px] px-3 py-1 rounded-lg font-black uppercase ${member.payment_status === 'Ödendi' ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-500 animate-pulse'}`}>{member.payment_status}</button>
-                        {progress && (
-                            <span className={`text-[10px] font-black flex items-center gap-1 ${parseFloat(progress) <= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                                <TrendingDown size={12}/> {progress} KG
+                        {progVal && (
+                            <span className={`text-[10px] font-black flex items-center gap-1 ${parseFloat(progVal) <= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                <TrendingDown size={12}/> {progVal} KG
                             </span>
                         )}
                     </div>
@@ -205,8 +177,8 @@ export default function Home() {
                     <p className="text-[10px] text-gray-500 font-bold uppercase mt-2 text-center">Seans</p>
                   </div>
                   <div className="flex flex-col gap-2">
-                    <button onClick={(e) => updateSession(e, member.id, member.remaining_sessions + 1)} className="w-12 h-12 border border-white/10 text-white rounded-2xl font-black transition-all hover:bg-green-500 hover:text-black hover:border-green-500 flex items-center justify-center shadow-lg"><Plus/></button>
-                    <button onClick={(e) => updateSession(e, member.id, member.remaining_sessions - 1)} className="w-12 h-12 border border-white/10 text-white rounded-2xl font-black transition-all hover:bg-red-500 hover:text-white hover:border-red-500 flex items-center justify-center shadow-lg"><Minus/></button>
+                    <button onClick={(e) => updateSession(e, member.id, member.remaining_sessions + 1)} className="w-12 h-12 border border-white/10 text-white rounded-2xl font-black hover:bg-green-500 hover:text-black transition-all flex items-center justify-center shadow-lg"><Plus/></button>
+                    <button onClick={(e) => updateSession(e, member.id, member.remaining_sessions - 1)} className="w-12 h-12 border border-white/10 text-white rounded-2xl font-black hover:bg-red-500 hover:text-white transition-all flex items-center justify-center shadow-lg"><Minus/></button>
                   </div>
                 </div>
               </div>
@@ -214,7 +186,7 @@ export default function Home() {
           })}
         </div>
 
-        {/* MODAL */}
+        {/* MODAL (RANDEVU İPTAL BUTONU EKLENDİ) */}
         {selectedMember && (
           <div className="fixed inset-0 bg-black/95 z-[100] flex items-center justify-center backdrop-blur-3xl animate-in fade-in duration-300">
             <div className="bg-[#080808] border border-white/10 rounded-[3.5rem] w-full h-full md:h-[95vh] md:w-[95vw] lg:max-w-6xl relative shadow-[0_0_120px_rgba(34,197,94,0.15)] flex flex-col overflow-hidden">
@@ -222,7 +194,7 @@ export default function Home() {
               <div className="flex-1 overflow-y-auto p-8 md:p-12 custom-scrollbar text-left">
                 <div className="mb-10 flex flex-col md:flex-row justify-between items-center md:items-end gap-10 border-b border-white/5 pb-10">
                   <div className="text-center md:text-left">
-                    <h2 className="text-5xl font-black text-green-400 uppercase tracking-tighter leading-none mb-6 text-left">{selectedMember.id}</h2>
+                    <h2 className="text-5xl font-black text-green-400 uppercase tracking-tighter leading-none mb-6">{selectedMember.id}</h2>
                     <div className="flex flex-wrap gap-5 justify-center md:justify-start">
                       <div className="flex flex-col"><input type="text" value={localGoal} placeholder="0" onChange={(e) => setLocalGoal(e.target.value)} onBlur={() => saveField('goal_weight', parseFloat(localGoal) || 0)} className="bg-white/5 border border-white/10 rounded-2xl px-5 py-2 text-sm text-yellow-500 w-24 outline-none font-bold text-center" /><span className="text-[9px] text-gray-600 font-black uppercase mt-2 text-center">Hedef</span></div>
                       <div className="flex flex-col"><input type="text" value={localHeight} placeholder="1.85" onChange={(e) => setLocalHeight(e.target.value)} onBlur={() => saveField('height', parseFloat(localHeight) || 0)} className="bg-white/5 border border-white/10 rounded-2xl px-5 py-2 text-sm text-blue-400 w-28 outline-none font-bold text-center" /><span className="text-[9px] text-gray-600 font-black uppercase mt-2 text-center">Boy (m)</span></div>
@@ -232,10 +204,10 @@ export default function Home() {
                   <div className={`transition-all duration-700 flex items-center gap-3 ${saveStatus ? 'opacity-100' : 'opacity-0'}`}><span className="text-green-500 text-xs font-black uppercase italic">Kaydedildi</span><CheckCircle className="text-green-500" size={24}/></div>
                 </div>
 
-                <div className="grid lg:grid-cols-2 gap-12">
-                  <div className="space-y-8">
+                <div className="grid lg:grid-cols-2 gap-12 text-left">
+                  <div className="space-y-8 text-left">
                     <div className="bg-black/60 p-8 rounded-[3rem] border border-white/5 shadow-inner">
-                      <div className="flex justify-between items-center mb-8 px-4">
+                      <div className="flex justify-between items-center mb-8 px-4 text-left">
                         <button onClick={() => setCurrentMonth(subMonths(currentMonth, 1))}><ChevronLeft size={24}/></button>
                         <h3 className="font-black text-lg uppercase tracking-widest text-green-400">{format(currentMonth, 'MMMM yyyy', { locale: tr })}</h3>
                         <button onClick={() => setCurrentMonth(addMonths(currentMonth, 1))}><ChevronRight size={24}/></button>
@@ -247,7 +219,7 @@ export default function Home() {
                           return (
                             <button key={idx} onClick={() => { setSelectedDate(day); const app = appointments.find(a => isSameDay(new Date(a.training_date), day)); setTrainingTime(app?.training_time || ''); setWorkoutProgram(app?.workout_program || ''); }} 
                               className={`aspect-square rounded-2xl text-sm font-bold transition-all flex items-center justify-center
-                              ${hasTraining ? 'bg-green-500 text-black shadow-lg scale-105' : 'bg-white/5 text-gray-500 hover:bg-white/10'} 
+                              ${hasTraining ? 'bg-green-500 text-black shadow-lg scale-105 font-black' : 'bg-white/5 text-gray-500 hover:bg-white/10'} 
                               ${selectedDate && isSameDay(day, selectedDate) ? 'ring-2 ring-white ring-offset-4 ring-offset-black' : ''}`}>
                               {format(day, 'd')}
                             </button>
@@ -257,15 +229,23 @@ export default function Home() {
                     </div>
                     {selectedDate && (
                       <div className="bg-white/5 p-8 rounded-[3rem] border border-white/10 space-y-6 animate-in slide-in-from-bottom duration-500 shadow-inner text-left">
-                        <p className="text-green-400 font-black uppercase text-xs tracking-widest text-left">📅 {format(selectedDate, 'd MMMM EEEE', { locale: tr })}</p>
+                        <div className="flex justify-between items-center">
+                            <p className="text-green-400 font-black uppercase text-xs tracking-widest">📅 {format(selectedDate, 'd MMMM EEEE', { locale: tr })}</p>
+                            {/* İPTAL BUTONU BURADA */}
+                            {appointments.some(a => isSameDay(new Date(a.training_date), selectedDate)) && (
+                                <button onClick={deleteAppointment} className="text-red-500/50 hover:text-red-500 text-[10px] font-black uppercase tracking-widest transition-colors flex items-center gap-1">
+                                    <XCircle size={14}/> Randevuyu İptal Et
+                                </button>
+                            )}
+                        </div>
                         <input type="time" value={trainingTime} onChange={(e) => setTrainingTime(e.target.value)} className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-xl font-black text-green-400 outline-none" />
-                        <textarea value={workoutProgram} onChange={(e) => setWorkoutProgram(e.target.value)} className="w-full bg-black border border-white/10 rounded-3xl p-6 h-40 text-sm outline-none resize-none shadow-inner leading-relaxed" placeholder="Egzersizler..."></textarea>
-                        <button onClick={saveAppointment} className="w-full bg-green-500 text-black font-black py-4 rounded-[1.5rem] uppercase text-[10px] tracking-widest shadow-xl">Kaydet</button>
+                        <textarea value={workoutProgram} onChange={(e) => setWorkoutProgram(e.target.value)} className="w-full bg-black border border-white/10 rounded-3xl p-6 h-40 text-sm outline-none resize-none leading-relaxed" placeholder="Program..."></textarea>
+                        <button onClick={saveAppointment} className="w-full bg-green-500 text-black font-black py-4 rounded-[1.5rem] uppercase text-[10px] tracking-widest active:scale-95 transition-all shadow-xl">Değişiklikleri Kaydet</button>
                       </div>
                     )}
                   </div>
 
-                  <div className="space-y-8">
+                  <div className="space-y-8 text-left">
                     <div className="bg-white/5 p-8 rounded-[3rem] border border-white/10 shadow-inner">
                       <div className="h-64 w-full bg-black/30 rounded-[2rem] p-4 text-left">
                           <ResponsiveContainer width="100%" height="100%">
@@ -281,7 +261,7 @@ export default function Home() {
                       </div>
                     </div>
                     <form onSubmit={addWeight} className="flex flex-col gap-4 bg-black/60 p-6 rounded-[2.5rem] border border-white/5 text-left"><p className="text-[10px] text-gray-600 font-black uppercase tracking-widest ml-1 text-left">Yeni Ölçüm</p><input type="number" step="0.1" value={newWeight} onChange={(e) => setNewWeight(e.target.value)} className="bg-transparent px-4 py-2 text-2xl font-black border-b border-white/5 outline-none" placeholder="Kilo..." /><button type="submit" className="bg-green-500 text-black font-black py-4 rounded-2xl uppercase text-[10px] tracking-widest shadow-lg">Ekle</button></form>
-                    <textarea value={localNotes} onChange={(e) => setLocalNotes(e.target.value)} onBlur={() => saveField('notes', localNotes)} className="w-full h-44 bg-black/60 border border-white/5 rounded-[2.5rem] p-7 text-sm outline-none resize-none shadow-inner leading-relaxed text-left" placeholder="Notlar..."></textarea>
+                    <textarea value={localNotes} onChange={(e) => setLocalNotes(e.target.value)} onBlur={() => saveField('notes', localNotes)} className="w-full h-44 bg-black/60 border border-white/5 rounded-[2.5rem] p-7 text-sm outline-none resize-none leading-relaxed text-left shadow-inner" placeholder="Üye notları..."></textarea>
                   </div>
                 </div>
               </div>
